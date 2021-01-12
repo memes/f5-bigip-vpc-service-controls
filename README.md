@@ -24,7 +24,7 @@
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| org\_id | The GCP Organisation ID that will have a polciy applied. | `string` | n/a | yes |
+| org\_id | The GCP Organisation ID that will have a policy applied. | `string` | n/a | yes |
 | project\_id | The GCP project identifier to use for testing. | `string` | n/a | yes |
 | region | The region to deploy test resources. Default is 'us-west1'. | `string` | `"us-west1"` | no |
 | tf\_sa\_email | The fully-qualified email address of the Terraform service account to use for<br>resource creation via account impersonation. If left blank, the default, then<br>the invoker's account will be used.<br><br>E.g. if you have permissions to impersonate:<br><br>tf\_sa\_email = "terraform@PROJECT\_ID.iam.gserviceaccount.com" | `string` | `""` | no |

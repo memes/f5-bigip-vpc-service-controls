@@ -26,7 +26,7 @@ EOD
 variable "org_id" {
   type        = string
   description = <<EOD
-The GCP Organisation ID that will have a polciy applied.
+The GCP Organisation ID that will have a policy applied.
 EOD
 }
 
