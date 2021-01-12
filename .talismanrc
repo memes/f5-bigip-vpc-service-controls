@@ -1,3 +1,5 @@
 # spell-checker: ignore fileignoreconfig
 ---
 fileignoreconfig:
+- filename: main.tf
+  checksum: fe39bfbd1292dfdc30055d67891ff67990aaf962c5ab2400fb2da6d1d0606465
