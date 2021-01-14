@@ -1,63 +1,58 @@
-# This module has been tested with Terraform 0.14 but is using modules that
-# are supported in versions 0.13+.
+# This example is only supported on Terraform 0.13 due to upstream module dependencies.
 terraform {
-  required_version = "> 0.12"
+  required_version = "~> 0.13, < 0.14"
 }
 
 # Service account impersonation (if enabled) and Google provider setup is
 # handled in providers.tf
 
-# Generate a random prefix
-resource "random_pet" "prefix" {
-  length = 1
-  keepers = {
-    project_id = var.project_id
-  }
+module "project" {
+  source                             = "terraform-google-modules/project-factory/google"
+  version                            = "10.0.1"
+  billing_account                    = var.billing_id
+  name                               = "vpc-controls-bigip"
+  random_project_id                  = true
+  org_id                             = var.org_id
+  vpc_service_control_attach_enabled = false
+  default_service_account            = "disable"
+  activate_apis = [
+    "compute.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "secretmanager.googleapis.com",
+  ]
+  auto_create_network = false
 }
 
-module "org_policy" {
+module "policy" {
   source      = "terraform-google-modules/vpc-service-controls/google"
   version     = "2.0.0"
   parent_id   = var.org_id
-  policy_name = format("%s-vpc-bigip", random_pet.prefix.id)
+  policy_name = "vpc_svc_controls"
 }
 
-module "service_perimeter_bigip" {
-  source              = "terraform-google-modules/vpc-service-controls/google/modules/regular_service_perimeter"
+module "policy_level" {
+  source  = "terraform-google-modules/vpc-service-controls/google//modules/access_level"
+  version = "2.0.0"
+  policy  = module.policy.policy_id
+  name    = "vpc_svc_controls_tf"
+  members = formatlist("serviceAccount:%s", compact([
+    var.tf_sa_email,
+    google_service_account.tf.email,
+  ]))
+}
+
+module "service_perimeter" {
+  source              = "terraform-google-modules/vpc-service-controls/google//modules/regular_service_perimeter"
   version             = "2.0.0"
-  policy              = module.org_policy.policy_id
-  perimeter_name      = format("%s-bigip", random_pet.prefix.id)
+  policy              = module.policy.policy_id
+  perimeter_name      = "vpc_svc_controls_perimeter"
   description         = "Enforcing VPC service control policy for BIG-IP"
-  resources           = [var.project_id]
-  restricted_services = ["compute.googleapis.com"]
-}
-
-# Create the service account(s) to be used in the project
-module "sa" {
-  source     = "terraform-google-modules/service-accounts/google"
-  version    = "3.0.1"
-  project_id = var.project_id
-  prefix     = random_pet.prefix.id
-  names      = ["bigip"]
-  project_roles = [
-    "${var.project_id}=>roles/logging.logWriter",
-    "${var.project_id}=>roles/monitoring.metricWriter",
-    "${var.project_id}=>roles/monitoring.viewer",
+  access_levels       = [module.policy_level.name]
+  restricted_services = var.restricted_services
+  resources = [
+    module.project.project_number
   ]
-  generate_keys = false
-}
-
-module "password" {
-  source     = "memes/secret-manager/google//modules/random"
-  version    = "1.0.2"
-  project_id = var.project_id
-  id         = format("%s-bigip-admin-key", random_pet.prefix.id)
-  accessors = [
-    # Generated service account email address is predictable - use it directly
-    format("serviceAccount:%s-bigip@%s.iam.gserviceaccount.com", random_pet.prefix.id, var.project_id),
-  ]
-  length           = 16
-  special_char_set = "@#%&*()-_=+[]<>:?"
 }
 
 locals {
@@ -70,8 +65,8 @@ locals {
 module "alpha" {
   source                                 = "terraform-google-modules/network/google"
   version                                = "3.0.0"
-  project_id                             = var.project_id
-  network_name                           = format("%s-alpha", random_pet.prefix.id)
+  project_id                             = module.project.project_id
+  network_name                           = "alpha"
   delete_default_internet_gateway_routes = false
   mtu                                    = 1500
   subnets = [
@@ -89,8 +84,8 @@ module "alpha" {
 module "beta" {
   source                                 = "terraform-google-modules/network/google"
   version                                = "3.0.0"
-  project_id                             = var.project_id
-  network_name                           = format("%s-beta", random_pet.prefix.id)
+  project_id                             = module.project.project_id
+  network_name                           = "beta"
   delete_default_internet_gateway_routes = false
   mtu                                    = 1500
   subnets = [
@@ -107,8 +102,8 @@ module "beta" {
 module "gamma" {
   source                                 = "terraform-google-modules/network/google"
   version                                = "3.0.0"
-  project_id                             = var.project_id
-  network_name                           = format("%s-gamma", random_pet.prefix.id)
+  project_id                             = module.project.project_id
+  network_name                           = "gamma"
   delete_default_internet_gateway_routes = true
   mtu                                    = 1500
   subnets = [
@@ -127,10 +122,10 @@ module "gamma" {
 module "beta-nat" {
   source                             = "terraform-google-modules/cloud-nat/google"
   version                            = "~> 1.3.0"
-  project_id                         = var.project_id
+  project_id                         = module.project.project_id
   region                             = var.region
-  name                               = format("%s-beta", random_pet.prefix.id)
-  router                             = format("%s-beta", random_pet.prefix.id)
+  name                               = "vpc-controls-beta"
+  router                             = "vpc-controls-beta"
   create_router                      = true
   source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
   network                            = module.beta.network_self_link
@@ -143,33 +138,55 @@ module "beta-nat" {
   ]
 }
 
-# Randomise the zones to be used by modules
-data "google_compute_zones" "available" {
-  project = var.project_id
-  region  = var.region
-  status  = "UP"
+# Note: not using Google module to avoid dependency problems when creating from scratch.
+# Create the service account to be used by Terraform, scoped to project
+resource "google_service_account" "tf" {
+  project      = module.project.project_id
+  account_id   = "terraform"
+  display_name = "Terraform automation service account"
 }
 
-resource "random_shuffle" "zones" {
-  input = data.google_compute_zones.available.names
-  keepers = {
-    prefix = var.prefix
-    region = var.region
-  }
+# Bind the impersonation privileges to the Terraform service account if group
+# list is not empty.
+resource "google_service_account_iam_member" "tf_impersonate_user" {
+  for_each           = toset(var.tf_sa_impersonators)
+  service_account_id = google_service_account.tf.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = each.value
 }
 
-module "bigip" {
-  source                            = "git::https://github.com/memes/terraform-google-f5-bigip"
-  project_id                        = var.project_id
-  zones                             = random_shuffle.zones.result
-  num_instances                     = var.num_instances
-  instance_name_template            = format("%s-vpc-%d", var.prefix)
-  machine_type                      = "n1-standard-8"
-  service_account                   = module.sa.emails["bigip"]
-  enable_serial_console             = true
-  external_subnetwork               = element(module.alpha.subnets_self_links, 0)
-  provision_external_public_ip      = false
-  management_subnetwork             = element(module.alpha.subnets_self_links, 0)
-  internal_subnetworks              = module.alpha.subnets_self_links
-  admin_password_secret_manager_key = module.password.secret_id
+resource "google_service_account_iam_member" "tf_impersonate_token" {
+  for_each           = toset(var.tf_sa_impersonators)
+  service_account_id = google_service_account.tf.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = each.value
+}
+
+resource "google_project_iam_member" "tf_sa_roles" {
+  for_each = toset([
+    "roles/compute.admin",
+    "roles/iam.serviceAccountUser",
+    "roles/secretmanager.admin",
+  ])
+  project = module.project.project_id
+  role    = each.value
+  member  = format("serviceAccount:%s", google_service_account.tf.email)
+}
+
+# Create a service account for BIG-IP instances
+resource "google_service_account" "bigip" {
+  project      = module.project.project_id
+  account_id   = "big-ip"
+  display_name = "BIG-IP instance service account"
+}
+
+resource "google_project_iam_member" "bigip_sa_roles" {
+  for_each = toset([
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+    "roles/monitoring.viewer",
+  ])
+  project = module.project.project_id
+  role    = each.value
+  member  = format("serviceAccount:%s", google_service_account.bigip.email)
 }

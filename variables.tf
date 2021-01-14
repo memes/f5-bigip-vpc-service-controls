@@ -30,10 +30,10 @@ The GCP Organisation ID that will have a policy applied.
 EOD
 }
 
-variable "project_id" {
+variable "billing_id" {
   type        = string
   description = <<EOD
-The GCP project identifier to use for testing.
+The GCP billing identifier to use for created project.
 EOD
 }
 
@@ -42,5 +42,30 @@ variable "region" {
   default     = "us-west1"
   description = <<EOD
 The region to deploy test resources. Default is 'us-west1'.
+EOD
+}
+
+variable "restricted_services" {
+  type        = list(string)
+  default     = []
+  description = <<EOD
+The list of GCP services to restrict in the created policy.
+EOD
+}
+
+variable "tf_sa_impersonators" {
+  type        = list(string)
+  default     = []
+  description = <<EOD
+A list of fully-qualified IAM accounts that will be allowed to impersonate the
+project-specific Terraform service account. If no accounts are supplied,
+impersonation will not be setup by the script.
+E.g.
+tf_sa_impersonators = [
+  "group:devsecops@example.com",
+  "group:admins@example.com",
+  "user:jane@example.com",
+  "serviceAccount:ci-cd@project.iam.gserviceaccount.com",
+]
 EOD
 }
